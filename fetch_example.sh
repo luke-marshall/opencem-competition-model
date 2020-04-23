@@ -1,0 +1,1 @@
+scp -r root@167.99.107.17:~/openCEM/examples/scenario02/scenario02 ./scenario02
