@@ -1,5 +1,5 @@
-from nersi.market import NodalMarket
-from nersi.calculator import calculate_max_generator_capacity
+from nersi import NodalMarket
+
 
 
 
@@ -56,7 +56,7 @@ def apply_nersi(timeseries, intercon_cap_lookup):
     # market.draw()
     market.print()
     for dt in timeseries:
-        print("NERSI:",dt)
+        print("APPLYING NERSI:",dt)
         # Calculate and add all available surplus capacity to nodes. 
         for region in timeseries[dt]:
             # print("\n",region)
@@ -69,7 +69,7 @@ def apply_nersi(timeseries, intercon_cap_lookup):
         for region in timeseries[dt]:
             region_demand = timeseries[dt][region]['total_demand_MW']
             region_available_capacity = timeseries[dt][region]['total_available_capacity_MW']
-            max_capacity = calculate_max_generator_capacity(market, region, region_demand, region_available_capacity)
+            max_capacity = market.calculate_max_generator_capacity(region, region_demand, region_available_capacity)
             # print(region, max_capacity)
             timeseries[dt][region]['nersi_max_capacity'] = max_capacity
 
