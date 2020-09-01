@@ -25,7 +25,6 @@ def process(gen_threshold_MW, file_path):
                 if nersi_max_cap <= gen_threshold_MW:
                     volumes[state] += float(line[state+' total_demand_MW'])
                     time_periods[state] += 1
-    
 
     # Calculate and print results
     x = PrettyTable()
@@ -47,4 +46,4 @@ if __name__ =="__main__":
         file_path = sys.argv[2]
         print("Calculating for a",gen_threshold_MW,"MW system, for csv file",file_path)
         process(gen_threshold_MW, file_path)
-        
+
