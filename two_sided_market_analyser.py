@@ -248,7 +248,7 @@ if __name__ =="__main__":
         process(10000, file_path)
         
         tables.print_tables()
-        tables.export_tables_to_csv('two_sied_market_results.csv')
+        tables.export_tables_to_csv('two_sided_market_results.csv')
 
 
 
