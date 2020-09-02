@@ -1,3 +1,4 @@
 output/*
 opencem_results/*
 analysis/*
+*.pyc
