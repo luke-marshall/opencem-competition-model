@@ -8,12 +8,20 @@ import sys
 import csv
 from prettytable import PrettyTable
 import pendulum
+from src.tables import TableManager
 
-REGIONS = ['NSW', 'QLD', 'SA', 'VIC', 'TAS']
+REGIONS = ['QLD', 'NSW', 'VIC', 'SA']
 BASE_CASE_CEILING_PRICE = 14900.0 #14,900/MWh
 BEST_CASE_2SM_CEILING = 500.0
 
+# Market price cap.
 MPC = 14900 
+
+TIME_PERIOD_HRS = 1
+
+MW_TO_TW = 1e-6
+MW_TO_GW = 1e-6
+
 
 # Cumulative price bands, taken from the 'Step Change' Scenario of the 2019 Input and Assumption Workbook from AEMO
 # https://aemo.com.au/en/energy-systems/electricity/national-electricity-market-nem/nem-forecasting-and-planning/scenarios-inputs-assumptions-methodologies-and-guidelines
@@ -34,6 +42,8 @@ WINTER_FLEX_CUMULATIVE_PRICE_BANDS = {
     'SA':[ (300, 500, 26.81),  (500, 1000, 72.65), (1000, 7500, 80.84), (7500, MPC, 223.35) ,(MPC, MPC, 223.35)],
     'TAS':[ (300, 500, 0.0),  (500, 1000, 2.21), (1000, 7500, 75.0), (7500, MPC, 75.0) ,(MPC, MPC, 75.0)],
 }
+
+tables = TableManager()
 
 def generate_demand_curve_from_price_bands(price_bands, total_demand):
     """
@@ -69,12 +79,12 @@ def generate_demand_curve_from_price_bands(price_bands, total_demand):
     return demand_curve
 
 
-def possible_withholding_MW(gen_size, max_gen_size):
+def possible_withholding_MW(gen_size, max_gen_size, total_demand):
     """
     Takes the investigated generator size (MW) and the maximum generator size (to stay under NERSI threshold), 
     calculates how many MW could be withheld for profit if the investigated generator has market power.
     """
-    return max(gen_size - max_gen_size, 0)
+    return max(min(total_demand, gen_size - max_gen_size), 0)
 
 def closer_to_winter(dt):
     midwinter = pendulum.datetime(dt.year, 7,16)
@@ -86,7 +96,7 @@ def closer_to_winter(dt):
     else:
         return True
 
-def get_demand_curve(dt, total_demand, region):
+def get_two_sided_market_demand_curve(dt, total_demand, region):
     """Given a datetime, return the demand curve as piecewise constant monotone decreasing function 
     (array of price-volume tuples).
     """
@@ -97,6 +107,9 @@ def get_demand_curve(dt, total_demand, region):
         price_bands = SUMMER_FLEX_CUMULATIVE_PRICE_BANDS[region]
     # Generate a demand curve from the price bands. 
     return generate_demand_curve_from_price_bands(price_bands, total_demand)
+
+def get_single_sided_market_demand_curve(total_demand):
+    return [(MPC, total_demand)]
 
 def make_rational_bid_decision (possible_withholding_MW, demand_curve):
     """
@@ -115,7 +128,7 @@ def make_rational_bid_decision (possible_withholding_MW, demand_curve):
         remaining_volume += volume
 
     # Loop through all the candidate bids, see which one earns the most.
-    print("Candidate bids:", candidate_bids) 
+    
     candidate = candidate_bids[0]
     for bid in candidate_bids:
         # Bid earns volume dispatched * price. 
@@ -131,15 +144,59 @@ def make_rational_bid_decision (possible_withholding_MW, demand_curve):
 
     
 def process(gen_threshold_MW, file_path):
+    print("\nCalculating competitive metrics for a",gen_threshold_MW,"MW system, for csv file",file_path,"\n")
+
     with open(file_path) as f:
         reader = csv.DictReader(f)
+        # Slots to record metrics
+        count_of_mp_opportunities = {r:0 for r in REGIONS}
+        total_savings = {r:0 for r in REGIONS}
+        demand_response_volume = {r:0 for r in REGIONS}
+        cumulative_demand_volume = {r:0 for r in REGIONS}
+        total_2sm_energy_cost = {r:0 for r in REGIONS}
+
         for line in reader:
             dt = pendulum.parse(line['Date '])
-            region = 'NSW'
-            total_demand = float(line[region+' total_demand_MW'])
-            print(dt, total_demand)
+     
+            for region in REGIONS:
+                
+                total_demand = float(line[region+' total_demand_MW'])
+                nersi_max_cap_MW = float(line[region+' nersi_max_capacity'])
+                
+                # Calculate the maximum volume it is possible for the generator to withhold. 
+                max_withholding_volume  = possible_withholding_MW(gen_threshold_MW, nersi_max_cap_MW, total_demand)
+                # if it is possible for the generator to withhold some volume in this time period, calculate the rational decision for flexible and inflexible demand curves. 
+                if max_withholding_volume > 0:
+                    # Make a two-sided market decision.
+                    demand_curve_2sm = get_two_sided_market_demand_curve(dt, total_demand, region)
+                    decision_2sm = make_rational_bid_decision(max_withholding_volume, demand_curve_2sm)
 
-            break
+                    # Make a single-sided market decision.
+                    demand_curve_1sm = get_single_sided_market_demand_curve(total_demand)
+                    decision_1sm = make_rational_bid_decision(max_withholding_volume, demand_curve_1sm)
+
+                    # Calculate the magnitude of the demand response in relation to the 2sm decision. 
+                    demand_response_MW = max_withholding_volume - decision_2sm[1]
+
+                    # Record relevant metrics
+                    count_of_mp_opportunities[region] += 1
+                    total_savings[region] += (decision_1sm[0] * total_demand) - (decision_2sm[0] * (total_demand - demand_response_MW))
+                    demand_response_volume[region] += demand_response_MW
+                    cumulative_demand_volume[region] += total_demand
+                    total_2sm_energy_cost[region] += (total_demand - demand_response_MW) * decision_2sm[0]
+
+                    # print(region, dt, total_demand, nersi_max_cap_MW, max_withholding_volume, decision_1sm, decision_2sm)
+        
+        
+        # Record relevant metrics to table for printing and analysis.
+        tables.add_row('Count of Market Power Opportunities', [gen_threshold_MW]+[count_of_mp_opportunities[r] for r in REGIONS])
+        tables.add_row('Total $ Savings', [gen_threshold_MW]+[total_savings[r] for r in REGIONS])
+        tables.add_row('Average 2SM Market Price During MP Events', [gen_threshold_MW]+[total_2sm_energy_cost[r] / (cumulative_demand_volume[r] - demand_response_volume[r]) if cumulative_demand_volume[r] > 0 else 0 for r in REGIONS])
+        tables.add_row('Total Original Demand During MP Events', [gen_threshold_MW]+[cumulative_demand_volume[r] * TIME_PERIOD_HRS * MW_TO_GW for r in REGIONS])
+        tables.add_row('Total DR Volume (GWh) During MP Events', [gen_threshold_MW]+[demand_response_volume[r] * TIME_PERIOD_HRS * MW_TO_GW for r in REGIONS])
+        tables.add_row('DR as Percent of Total Demand During MP Events', [gen_threshold_MW]+[100.0 * demand_response_volume[r] / cumulative_demand_volume[r]  if cumulative_demand_volume[r] > 0 else 0 for r in REGIONS])
+        
+        
 
 
 def process_old(gen_threshold_MW, file_path):
@@ -170,13 +227,28 @@ def process_old(gen_threshold_MW, file_path):
 
 if __name__ =="__main__":
     print(sys.argv)
-    if len(sys.argv) < 3:
-        print("Not enough arguments. Usage: python peak_price_estimator.py <gen_size> <input_file_path>")
+    if len(sys.argv) < 2:
+        print("Not enough arguments. Usage: python peak_price_estimator.py <input_file_path>")
     else:
-        gen_threshold_MW = float(sys.argv[1])
-        file_path = sys.argv[2]
-        print("\nCalculating competitive metrics for a",gen_threshold_MW,"MW system, for csv file",file_path,"\n")
-        process(gen_threshold_MW, file_path)
+        
+        file_path = sys.argv[1]
+
+        tables.set_field_names('Count of Market Power Opportunities',['Generator Size']+[r for r in REGIONS])
+        tables.set_field_names('Total $ Savings',['Generator Size']+[r for r in REGIONS])
+        tables.set_field_names('Average 2SM Market Price During MP Events',['Generator Size']+[r for r in REGIONS])
+        tables.set_field_names('Total Original Demand During MP Events',['Generator Size']+[r for r in REGIONS])
+        tables.set_field_names('Total DR Volume (GWh) During MP Events',['Generator Size']+[r for r in REGIONS])
+        tables.set_field_names('DR as Percent of Total Demand During MP Events',['Generator Size']+[r for r in REGIONS])
+        
+        process(200, file_path)
+        process(500, file_path)
+        process(1000, file_path)
+        process(2000, file_path)
+        process(5000, file_path)
+        process(10000, file_path)
+        
+        tables.print_tables()
+        tables.export_tables_to_csv('two_sied_market_results.csv')
 
 
 

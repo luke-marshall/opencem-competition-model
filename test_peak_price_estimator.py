@@ -44,8 +44,8 @@ def test_generate_demand_curve_from_price_bands():
         assert curve[i] == expected_curve[i]
 
 
-def test_get_demand_curve():
-    curve = get_demand_curve(pendulum.datetime(2050, 1, 1), 5000, 'NSW')
+def test_get_two_sided_market_demand_curve():
+    curve = get_two_sided_market_demand_curve(pendulum.datetime(2050, 1, 1), 5000, 'NSW')
     # original cumulative price bands are [ (300, 500, 564.11),  (500, 1000, 1057.55), (1000, 7500, 1084.05), (7500, MPC, 1267.11) ,(MPC, MPC, 1267.11)],
     expected = [(MPC, 5000 - 1267.11),(7500, 1267.11 - 1084.05 ) ,(1000, 1084.05 - 1057.55),(500, 1057.55 - 564.11 ),(300, 564.11)]
     for i in range(len(curve)):
