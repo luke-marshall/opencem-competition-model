@@ -46,7 +46,25 @@ def test_generate_demand_curve_from_price_bands():
 
 def test_get_demand_curve():
     curve = get_demand_curve(pendulum.datetime(2050, 1, 1), 5000, 'NSW')
-    # [ (300, 500, 564.11),  (500, 1000, 1057.55), (1000, 7500, 1084.05), (7500, MPC, 1267.11) ,(MPC, MPC, 1267.11)],
+    # original cumulative price bands are [ (300, 500, 564.11),  (500, 1000, 1057.55), (1000, 7500, 1084.05), (7500, MPC, 1267.11) ,(MPC, MPC, 1267.11)],
     expected = [(MPC, 5000 - 1267.11),(7500, 1267.11 - 1084.05 ) ,(1000, 1084.05 - 1057.55),(500, 1057.55 - 564.11 ),(300, 564.11)]
     for i in range(len(curve)):
         assert curve[i] == expected[i]
+
+def test_make_rational_bid_decision():
+    # Should bid 1 unit shadowing ceiling price.
+    decision = make_rational_bid_decision(50, [(MPC, 50), (100, 30), (50, 19)])
+    expected = (MPC-1, 1)
+    assert expected == decision
+
+    # Should bid 45 units at 49 dollars.
+    decision = make_rational_bid_decision(50, [(70, 1), (60, 4), (50, 45)])
+    expected = (50-1, 45)
+    assert expected == decision
+
+    # Should bid 40 units at 59 dollars.
+    decision = make_rational_bid_decision(50, [(70, 1), (60, 40), (50, 5)])
+    expected = (60-1, 40)
+    assert expected == decision
+
+    

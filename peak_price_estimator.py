@@ -36,8 +36,10 @@ WINTER_FLEX_CUMULATIVE_PRICE_BANDS = {
 }
 
 def generate_demand_curve_from_price_bands(price_bands, total_demand):
-    """Takes a series of ordered cumulative price bands (as in the AEMO assumptions workbook) 
-    and a total demand, arranges into a piecewise demand curve."""
+    """
+    Takes a series of ordered cumulative price bands (as in the AEMO assumptions workbook) 
+    and a total demand, arranges into a piecewise demand curve.
+    """
     demand_curve = []
     
     # Assemble the flex part of the demand curve
@@ -68,13 +70,15 @@ def generate_demand_curve_from_price_bands(price_bands, total_demand):
 
 
 def possible_withholding_MW(gen_size, max_gen_size):
-    """Takes the investigated generator size (MW) and the maximum generator size (to stay under NERSI threshold), 
-    calculates how many MW could be withheld for profit if the investigated generator has market power."""
+    """
+    Takes the investigated generator size (MW) and the maximum generator size (to stay under NERSI threshold), 
+    calculates how many MW could be withheld for profit if the investigated generator has market power.
+    """
     return max(gen_size - max_gen_size, 0)
 
 def closer_to_winter(dt):
     midwinter = pendulum.datetime(dt.year, 7,16)
-    
+    # If it's after 10 October or before 4 August in the same year, it's closer to summer. Otherwise closer to winter. 
     if dt > pendulum.datetime(dt.year, 10,16) :
         return False
     elif dt < pendulum.datetime(dt.year, 4, 16):
@@ -83,26 +87,59 @@ def closer_to_winter(dt):
         return True
 
 def get_demand_curve(dt, total_demand, region):
-    """Given a datetime, return the demand curve as piecewise constant monotone decreasing function (array of price-volume tuples)."""
-    # Determine whether closer to summer or winter (different curves provided by AEMO). 
-    # For simplicity this will be the number of days from 16 July
+    """Given a datetime, return the demand curve as piecewise constant monotone decreasing function 
+    (array of price-volume tuples).
+    """
+    # Determine whether to use the AEMO summer or winter price bands. 
     if closer_to_winter(dt):
         price_bands = WINTER_FLEX_CUMULATIVE_PRICE_BANDS[region]
     else:
         price_bands = SUMMER_FLEX_CUMULATIVE_PRICE_BANDS[region]
-
+    # Generate a demand curve from the price bands. 
     return generate_demand_curve_from_price_bands(price_bands, total_demand)
+
+def make_rational_bid_decision (possible_withholding_MW, demand_curve):
+    """
+    Given a maximum possible withholding volume and assuming that this is the marginal generator, 
+    examine the demand curve and make the most valuable decision for this time period. 
+    Returns a price, volume tuple. 
+    """
+    # Work backwards from the end of the demand curve, assemble all possible rational candidate bids by taking maximum volume shadow bid at each price point. 
+    candidate_bids = []
+    remaining_volume = 0
+    for demand_bid in reversed(demand_curve):
+        shadow_price = demand_bid[0] - 1
+        # Volume available at a given demand level.
+        volume = max(min(demand_bid[1], possible_withholding_MW - remaining_volume), 0)
+        candidate_bids.append( (shadow_price, volume))
+        remaining_volume += volume
+
+    # Loop through all the candidate bids, see which one earns the most.
+    print("Candidate bids:", candidate_bids) 
+    candidate = candidate_bids[0]
+    for bid in candidate_bids:
+        # Bid earns volume dispatched * price. 
+        if bid[0] * bid[1] > candidate[0] * candidate[1]:
+            candidate = bid
+        # If bid has same return but lower volume dispatched, favour lower volume
+        elif bid[0] * bid[1] == candidate[0] * candidate[1] and bid[1] < candidate[1]:
+            candidate = bid
+        
+    # Return the bid with the highest return
+    return candidate
+
+
     
-
-
 def process(gen_threshold_MW, file_path):
     with open(file_path) as f:
         reader = csv.DictReader(f)
         for line in reader:
             dt = pendulum.parse(line['Date '])
-            print(dt)
+            region = 'NSW'
+            total_demand = float(line[region+' total_demand_MW'])
+            print(dt, total_demand)
 
-
+            break
 
 
 def process_old(gen_threshold_MW, file_path):
@@ -138,7 +175,7 @@ if __name__ =="__main__":
     else:
         gen_threshold_MW = float(sys.argv[1])
         file_path = sys.argv[2]
-        print("Calculating for a",gen_threshold_MW,"MW system, for csv file",file_path)
+        print("\nCalculating competitive metrics for a",gen_threshold_MW,"MW system, for csv file",file_path,"\n")
         process(gen_threshold_MW, file_path)
 
 
