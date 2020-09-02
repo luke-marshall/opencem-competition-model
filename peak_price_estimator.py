@@ -7,19 +7,112 @@ generator was at that level.
 import sys
 import csv
 from prettytable import PrettyTable
+import pendulum
 
-STATES = ['NSW', 'QLD', 'SA', 'VIC', 'TAS']
+REGIONS = ['NSW', 'QLD', 'SA', 'VIC', 'TAS']
 BASE_CASE_CEILING_PRICE = 14900.0 #14,900/MWh
 BEST_CASE_2SM_CEILING = 500.0
 
+MPC = 14900 
+
+# Cumulative price bands, taken from the 'Step Change' Scenario of the 2019 Input and Assumption Workbook from AEMO
+# https://aemo.com.au/en/energy-systems/electricity/national-electricity-market-nem/nem-forecasting-and-planning/scenarios-inputs-assumptions-methodologies-and-guidelines
+# https://aemo.com.au/-/media/files/electricity/nem/planning_and_forecasting/inputs-assumptions-methodologies/2020/2020-inputs-and-assumptions-workbook.xlsx?la=en
+# Arrays of tuples - tuple is (min price, max price, volume)
+SUMMER_FLEX_CUMULATIVE_PRICE_BANDS = {
+    'QLD':[ (300, 500, 26.43),  (500, 1000, 45.13), (1000, 7500, 50.20), (7500, MPC, 135.93) ,(MPC, MPC, 854.91)],
+    'NSW':[ (300, 500, 564.11),  (500, 1000, 1057.55), (1000, 7500, 1084.05), (7500, MPC, 1267.11) ,(MPC, MPC, 1267.11)],
+    'VIC':[ (300, 500, 151.09),  (500, 1000, 504.61), (1000, 7500, 542.05), (7500, MPC, 652.85) ,(MPC, MPC, 926.56)],
+    'SA':[ (300, 500, 35.86),  (500, 1000, 97.18), (1000, 7500, 108.14), (7500, MPC, 298.78) ,(MPC, MPC, 298.78)],
+    'TAS':[ (300, 500, 0.0),  (500, 1000, 1.79), (1000, 7500, 60.59), (7500, MPC, 60.59) ,(MPC, MPC, 60.59)],
+}
+
+WINTER_FLEX_CUMULATIVE_PRICE_BANDS = {
+    'QLD':[(300, 500, 25.07) , (500,1000, 42.80),  (1000, 7500, 47.62), (7500, MPC, 128.93) ,(MPC, MPC, 730.0)],
+    'NSW':[ (300, 500, 444.44), (500, 1000, 833.21), (1000, 7500, 854.09), (7500, MPC, 998.31) ,(MPC, MPC, 998.31)],
+    'VIC':[ (300, 500, 180.09),  (500, 1000, 601.46), (1000, 7500, 646.09), (7500, MPC, 778.15) ,(MPC, MPC, 778.15)],
+    'SA':[ (300, 500, 26.81),  (500, 1000, 72.65), (1000, 7500, 80.84), (7500, MPC, 223.35) ,(MPC, MPC, 223.35)],
+    'TAS':[ (300, 500, 0.0),  (500, 1000, 2.21), (1000, 7500, 75.0), (7500, MPC, 75.0) ,(MPC, MPC, 75.0)],
+}
+
+def generate_demand_curve_from_price_bands(price_bands, total_demand):
+    """Takes a series of ordered cumulative price bands (as in the AEMO assumptions workbook) 
+    and a total demand, arranges into a piecewise demand curve."""
+    demand_curve = []
+    
+    # Assemble the flex part of the demand curve
+    remaining_demand = total_demand
+    cumulative_volume = 0
+    for band in price_bands:
+        value = band[0]
+        volume = band[2] - cumulative_volume
+
+        if value == MPC:
+            demand_curve.append((value, remaining_demand))
+        else:
+            demand_curve.append((value, min(volume, remaining_demand)))
+        
+        cumulative_volume += volume
+        remaining_demand = max(remaining_demand - volume, 0)
+
+        if remaining_demand == 0:
+            break
+    
+    # If there's no final MPC band with any remaining demand, add it. 
+    if remaining_demand > 0 and demand_curve[-1][0] != MPC:
+        demand_curve.append((MPC, remaining_demand))
+
+    # We were ascending in price - we want to make it descending instead.
+    demand_curve = list(reversed(demand_curve))
+    return demand_curve
+
+
+def possible_withholding_MW(gen_size, max_gen_size):
+    """Takes the investigated generator size (MW) and the maximum generator size (to stay under NERSI threshold), 
+    calculates how many MW could be withheld for profit if the investigated generator has market power."""
+    return max(gen_size - max_gen_size, 0)
+
+def closer_to_winter(dt):
+    midwinter = pendulum.datetime(dt.year, 7,16)
+    
+    if dt > pendulum.datetime(dt.year, 10,16) :
+        return False
+    elif dt < pendulum.datetime(dt.year, 4, 16):
+        return False
+    else:
+        return True
+
+def get_demand_curve(dt, total_demand, region):
+    """Given a datetime, return the demand curve as piecewise constant monotone decreasing function (array of price-volume tuples)."""
+    # Determine whether closer to summer or winter (different curves provided by AEMO). 
+    # For simplicity this will be the number of days from 16 July
+    if closer_to_winter(dt):
+        price_bands = WINTER_FLEX_CUMULATIVE_PRICE_BANDS[region]
+    else:
+        price_bands = SUMMER_FLEX_CUMULATIVE_PRICE_BANDS[region]
+
+    return generate_demand_curve_from_price_bands(price_bands, total_demand)
+    
+
+
 def process(gen_threshold_MW, file_path):
-    volumes = {state:0 for state in STATES}
-    time_periods = {state:0 for state in STATES}
+    with open(file_path) as f:
+        reader = csv.DictReader(f)
+        for line in reader:
+            dt = pendulum.parse(line['Date '])
+            print(dt)
+
+
+
+
+def process_old(gen_threshold_MW, file_path):
+    volumes = {state:0 for state in REGIONS}
+    time_periods = {state:0 for state in REGIONS}
 
     with open(file_path) as f:
         reader = csv.DictReader(f)
         for line in reader:
-            for state in STATES:
+            for state in REGIONS:
                 nersi_max_cap = float(line[state+' nersi_max_capacity'])
                 # Condition here is if the largest permissible generator size to prevent market power is less than the threshold being investigated. 
                 if nersi_max_cap <= gen_threshold_MW:
@@ -29,21 +122,28 @@ def process(gen_threshold_MW, file_path):
     # Calculate and print results
     x = PrettyTable()
     x.field_names = ["State", "Number of Pivotal Periods", "Total MWh Demand under Pivotal", "Worst-Case Cost", "Best-Case Cost"]
-    for state in STATES:
+    for state in REGIONS:
         peak_price_cost = float(volumes[state]) * BASE_CASE_CEILING_PRICE
         best_case_cost = float(volumes[state]) * BEST_CASE_2SM_CEILING
         x.add_row([state,  f"{round(time_periods[state]):,}", f"{round(volumes[state]):,}", f"${round(peak_price_cost):,}",f"${round(best_case_cost):,}",])
         # print(state,  f"{round(time_periods[state]):,}", f"{round(volumes[state]):,}", f"${round(peak_price_cost):,}",f"${round(best_case_cost):,}",)
     print(x)
-                
+
+
 
 if __name__ =="__main__":
     print(sys.argv)
     if len(sys.argv) < 3:
-        print("Usage: python peak_price_estimator.py <gen_size> <output_file_path>")
+        print("Not enough arguments. Usage: python peak_price_estimator.py <gen_size> <input_file_path>")
     else:
         gen_threshold_MW = float(sys.argv[1])
         file_path = sys.argv[2]
         print("Calculating for a",gen_threshold_MW,"MW system, for csv file",file_path)
         process(gen_threshold_MW, file_path)
+
+
+
+
+
+    
 

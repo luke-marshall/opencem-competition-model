@@ -10,3 +10,5 @@ This script takes the json output files from OpenCEM and generates a timeseries 
 
 Usage: `poetry run python max_generator_size.py <OPENCEM_JSON_PATH> <OUTPUT_CSV_PATH>`
 
+## Unit Tests
+This package uses pytest. You can run the peak price estimator unit tests with `poetry run pytest`
